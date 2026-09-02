@@ -1,0 +1,772 @@
+const express = require('express');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bcryptjs = require('bcryptjs');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb' }));
+
+// MongoDB Connection
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/appont', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => console.log('Connected to MongoDB')).catch(err => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
+
+// ============ SCHEMAS ============
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true, sparse: true },
+  password: String,
+  role: { type: String, enum: ['admin', 'client'], default: 'client' },
+  isRestricted: { type: Boolean, default: false },
+  companyName: String,
+  companyAddress: String,
+  companyEmail: String,
+  companyPhone: String,
+  companyLogo: String,
+  projects: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Project' }],
+  createdAt: { type: Date, default: Date.now },
+});
+
+// Project Schema (replaces Invoice)
+const projectSchema = new mongoose.Schema({
+  projectNumber: { type: String, unique: true },
+  status: { type: String, enum: ['requirements_submitted', 'solution_generated', 'solution_approved', 'proposal_generated', 'proposal_approved', 'invoice_generated', 'invoice_approved', 'paid', 'in_development', 'completed'], default: 'requirements_submitted' },
+  
+  // Client Info
+  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  clientName: String,
+  clientEmail: String,
+  
+  // Admin Info
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  
+  // Project Details
+  projectTitle: String,
+  clientRequirements: String,
+  
+  // AI Solution
+  solutionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Solution' },
+  
+  // Proposal
+  proposalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Proposal' },
+  
+  // Invoice
+  invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
+  
+  // Payment
+  paymentStatus: { type: String, enum: ['unpaid', 'partially_paid', 'paid'], default: 'unpaid' },
+  amountPaid: { type: Number, default: 0 },
+  paymentLink: String,
+  
+  // Timeline
+  createdAt: { type: Date, default: Date.now },
+  solutionGeneratedAt: Date,
+  solutionApprovedAt: Date,
+  proposalGeneratedAt: Date,
+  proposalApprovedAt: Date,
+  invoiceGeneratedAt: Date,
+  invoiceApprovedAt: Date,
+  paidAt: Date,
+  developmentStartedAt: Date,
+});
+
+// Conversation Schema (for AI chat history)
+const conversationSchema = new mongoose.Schema({
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },
+  messages: [
+    {
+      role: { type: String, enum: ['user', 'assistant'] },
+      content: String,
+      timestamp: { type: Date, default: Date.now }
+    }
+  ],
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Solution Schema
+const solutionSchema = new mongoose.Schema({
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },
+  
+  // AI Generated Solution
+  overview: String,
+  techStack: {
+    frontend: String,
+    backend: String,
+    database: String,
+    hosting: String,
+    additional: [String]
+  },
+  
+  // Platform Options (Shopify, WordPress, Custom)
+  platformRecommendation: {
+    platform: { type: String, enum: ['Shopify', 'WordPress', 'Custom Development'] },
+    reason: String,
+    estimatedHours: Number,
+    basePrice: Number
+  },
+  
+  // Features
+  features: [
+    {
+      name: String,
+      description: String,
+      priority: { type: String, enum: ['must_have', 'should_have', 'nice_to_have'] },
+      estimatedHours: Number
+    }
+  ],
+  
+  // Apps/Plugins
+  apps: [
+    {
+      platform: String,
+      name: String,
+      description: String,
+      cost: Number,
+      features: [String]
+    }
+  ],
+  
+  // Timeline & Cost
+  timeline: String,
+  totalEstimatedHours: Number,
+  totalEstimatedCost: Number,
+  
+  // Admin Notes
+  adminNotes: String,
+  
+  // Timestamps
+  generatedAt: { type: Date, default: Date.now }
+});
+
+// Proposal Schema
+const proposalSchema = new mongoose.Schema({
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },
+  solutionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Solution', required: true },
+  
+  proposalNumber: { type: String, unique: true },
+  status: { type: String, enum: ['draft', 'sent_to_client', 'approved_by_client', 'rejected'], default: 'draft' },
+  
+  // Proposal Content (from Solution + Admin edits)
+  title: String,
+  overview: String,
+  techStack: String,
+  features: [
+    {
+      name: String,
+      description: String,
+      estimatedHours: Number
+    }
+  ],
+  apps: [
+    {
+      platform: String,
+      name: String,
+      description: String,
+      cost: Number
+    }
+  ],
+  
+  timeline: String,
+  totalCost: Number,
+  paymentTerms: String,
+  
+  // Admin edits
+  adminNotes: String,
+  
+  // Timeline tracking
+  createdAt: { type: Date, default: Date.now },
+  sentToClientAt: Date,
+  clientApprovedAt: Date
+});
+
+// Invoice Schema (generated from approved proposal)
+const invoiceSchema = new mongoose.Schema({
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },
+  proposalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Proposal', required: true },
+  
+  invoiceNumber: { type: String, unique: true },
+  status: { type: String, enum: ['draft', 'sent', 'partially_paid', 'paid'], default: 'draft' },
+  
+  // Details
+  title: String,
+  description: String,
+  totalAmount: Number,
+  
+  // Dates
+  invoiceDate: Date,
+  dueDate: Date,
+  
+  // Payment
+  paymentLink: String,
+  amountPaid: { type: Number, default: 0 },
+  
+  // Admin notes
+  adminNotes: String,
+  
+  // Timeline
+  createdAt: { type: Date, default: Date.now },
+  sentToClientAt: Date,
+  paidAt: Date
+});
+
+// Create models
+const User = mongoose.model('User', userSchema);
+const Project = mongoose.model('Project', projectSchema);
+const Conversation = mongoose.model('Conversation', conversationSchema);
+const Solution = mongoose.model('Solution', solutionSchema);
+const Proposal = mongoose.model('Proposal', proposalSchema);
+const Invoice = mongoose.model('Invoice', invoiceSchema);
+
+// ============ MIDDLEWARE ============
+
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'test-secret-key-change-in-production');
+    req.userId = decoded.userId;
+    req.userRole = decoded.role;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// ============ AUTH ENDPOINTS ============
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, isAdmin } = req.body;
+    const hashedPassword = await bcryptjs.hash(password, 10);
+    const user = new User({
+      name,
+      email,
+      password: hashedPassword,
+      role: isAdmin ? 'admin' : 'client'
+    });
+    await user.save();
+    const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET || 'test-secret-key-change-in-production');
+    res.json({ token, user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !await bcryptjs.compare(password, user.password)) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+    const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET || 'test-secret-key-change-in-production');
+    res.json({ token, user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/user', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('-password');
+    res.json(user);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ PROJECT ENDPOINTS ============
+
+// Create project from requirements
+app.post('/api/projects/create-from-requirements', async (req, res) => {
+  try {
+    const { projectTitle, requirements } = req.body;
+    const user = await User.findById(req.userId);
+    
+    const projectNumber = `PROJ-${Date.now()}`;
+    const project = new Project({
+      projectNumber,
+      status: 'requirements_submitted',
+      clientId: req.userId,
+      clientName: user.name,
+      clientEmail: user.email,
+      projectTitle,
+      clientRequirements: requirements,
+      adminId: null
+    });
+    
+    await project.save();
+    res.json(project);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Get all projects for client
+app.get('/api/projects', verifyToken, async (req, res) => {
+  try {
+    let projects;
+    if (req.userRole === 'admin') {
+      projects = await Project.find().sort({ createdAt: -1 }).populate('clientId', 'name email');
+    } else {
+      projects = await Project.find({ clientId: req.userId }).sort({ createdAt: -1 });
+    }
+    res.json(projects);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Get project details
+app.get('/api/projects/:id', verifyToken, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id)
+      .populate('clientId', 'name email')
+      .populate('solutionId')
+      .populate('proposalId')
+      .populate('invoiceId');
+    
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    
+    // Check authorization
+    if (req.userRole === 'client' && project.clientId._id.toString() !== req.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    res.json(project);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ AI CONVERSATION ENDPOINTS ============
+
+// Get conversation history
+app.get('/api/projects/:projectId/conversation', verifyToken, async (req, res) => {
+  try {
+    let conversation = await Conversation.findOne({ projectId: req.params.projectId });
+    if (!conversation) {
+      conversation = new Conversation({ projectId: req.params.projectId, messages: [] });
+      await conversation.save();
+    }
+    res.json(conversation);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Send message to AI (Claude)
+app.post('/api/projects/:projectId/chat', verifyToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+    const projectId = req.params.projectId;
+    
+    // Get conversation
+    let conversation = await Conversation.findOne({ projectId });
+    if (!conversation) {
+      conversation = new Conversation({ projectId, messages: [] });
+    }
+    
+    // Add user message
+    conversation.messages.push({ role: 'user', content: message });
+    
+    // Get project requirements for context
+    const project = await Project.findById(projectId);
+    
+    // Call Claude API
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 1500,
+        messages: [
+          {
+            role: 'user',
+            content: `You are an expert web development consultant. A client wants to build a website with these requirements:
+
+"${project.clientRequirements}"
+
+They just asked: "${message}"
+
+Provide helpful guidance on their project. Be specific about technical solutions, platforms (Shopify, WordPress, or custom), features, and rough timeline/costs. Keep response concise and actionable.`
+          }
+        ]
+      })
+    });
+    
+    const data = await response.json();
+    const aiMessage = data.content[0].text;
+    
+    // Add AI response
+    conversation.messages.push({ role: 'assistant', content: aiMessage });
+    await conversation.save();
+    
+    res.json({ message: aiMessage, conversation });
+  } catch (error) {
+    console.error('AI Chat error:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ SOLUTION ENDPOINTS ============
+
+// Generate AI solution
+app.post('/api/projects/:projectId/generate-solution', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const project = await Project.findById(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    
+    // Get conversation history
+    const conversation = await Conversation.findOne({ projectId: req.params.projectId });
+    const chatContext = conversation?.messages.map(m => `${m.role}: ${m.content}`).join('\n') || '';
+    
+    // Call Claude to generate full solution
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 3000,
+        messages: [{
+          role: 'user',
+          content: `You are an expert web development architect. Based on this client's requirements and conversation:
+
+CLIENT REQUIREMENTS: "${project.clientRequirements}"
+
+CONVERSATION HISTORY:
+${chatContext}
+
+Generate a comprehensive technical solution. Respond with ONLY a JSON object (no markdown, no explanation) with this exact structure:
+{
+  "overview": "2-3 sentence overview of the solution",
+  "techStack": {
+    "frontend": "React/Vue/etc with reasoning",
+    "backend": "Node/Python/etc with reasoning",
+    "database": "MongoDB/PostgreSQL/etc",
+    "hosting": "AWS/Vercel/etc",
+    "additional": ["tool1", "tool2"]
+  },
+  "platformRecommendation": {
+    "platform": "Shopify" or "WordPress" or "Custom Development",
+    "reason": "Why this platform is best",
+    "estimatedHours": number,
+    "basePrice": number
+  },
+  "features": [
+    {
+      "name": "Feature name",
+      "description": "What it does",
+      "priority": "must_have",
+      "estimatedHours": number
+    }
+  ],
+  "apps": [
+    {
+      "platform": "Shopify" or "WordPress",
+      "name": "App/Plugin name",
+      "description": "What it does",
+      "cost": number,
+      "features": ["feature1", "feature2"]
+    }
+  ],
+  "timeline": "4-8 weeks typical",
+  "totalEstimatedHours": number,
+  "totalEstimatedCost": number
+}`
+        }]
+      })
+    });
+    
+    const data = await response.json();
+    let solutionData = {};
+    
+    if (data.content && data.content[0]) {
+      try {
+        solutionData = JSON.parse(data.content[0].text);
+      } catch (e) {
+        console.error('Failed to parse solution:', e);
+      }
+    }
+    
+    // Create solution
+    const solution = new Solution({
+      projectId: req.params.projectId,
+      overview: solutionData.overview || '',
+      techStack: solutionData.techStack || {},
+      platformRecommendation: solutionData.platformRecommendation || {},
+      features: solutionData.features || [],
+      apps: solutionData.apps || [],
+      timeline: solutionData.timeline || '',
+      totalEstimatedHours: solutionData.totalEstimatedHours || 0,
+      totalEstimatedCost: solutionData.totalEstimatedCost || 0
+    });
+    
+    await solution.save();
+    
+    // Update project
+    project.solutionId = solution._id;
+    project.status = 'solution_generated';
+    project.solutionGeneratedAt = new Date();
+    await project.save();
+    
+    res.json(solution);
+  } catch (error) {
+    console.error('Solution generation error:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Client approves solution
+app.put('/api/projects/:projectId/approve-solution', verifyToken, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    
+    if (project.clientId.toString() !== req.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    project.status = 'solution_approved';
+    project.solutionApprovedAt = new Date();
+    await project.save();
+    
+    res.json(project);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ PROPOSAL ENDPOINTS ============
+
+// Generate proposal from approved solution
+app.post('/api/projects/:projectId/generate-proposal', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const project = await Project.findById(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    
+    const solution = await Solution.findById(project.solutionId);
+    if (!solution) return res.status(404).json({ error: 'Solution not found' });
+    
+    const proposalNumber = `PROP-${Date.now()}`;
+    const proposal = new Proposal({
+      projectId: req.params.projectId,
+      solutionId: project.solutionId,
+      proposalNumber,
+      status: 'draft',
+      title: `${project.projectTitle} - Development Proposal`,
+      overview: solution.overview,
+      techStack: `Frontend: ${solution.techStack.frontend}\nBackend: ${solution.techStack.backend}\nDatabase: ${solution.techStack.database}`,
+      features: solution.features,
+      apps: solution.apps,
+      timeline: solution.timeline,
+      totalCost: solution.totalEstimatedCost,
+      paymentTerms: '50% upfront, 50% on completion'
+    });
+    
+    await proposal.save();
+    
+    project.proposalId = proposal._id;
+    project.status = 'proposal_generated';
+    project.proposalGeneratedAt = new Date();
+    await project.save();
+    
+    res.json(proposal);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Send proposal to client
+app.put('/api/proposals/:id/send-to-client', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const proposal = await Proposal.findByIdAndUpdate(
+      req.params.id,
+      { status: 'sent_to_client', sentToClientAt: new Date() },
+      { new: true }
+    );
+    res.json(proposal);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Client approves proposal
+app.put('/api/proposals/:id/approve', verifyToken, async (req, res) => {
+  try {
+    const proposal = await Proposal.findById(req.params.id);
+    if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+    
+    proposal.status = 'approved_by_client';
+    proposal.clientApprovedAt = new Date();
+    await proposal.save();
+    
+    const project = await Project.findByIdAndUpdate(
+      proposal.projectId,
+      { status: 'proposal_approved', proposalApprovedAt: new Date() },
+      { new: true }
+    );
+    
+    res.json({ proposal, project });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ INVOICE ENDPOINTS ============
+
+// Generate invoice from approved proposal
+app.post('/api/proposals/:proposalId/generate-invoice', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const proposal = await Proposal.findById(req.params.proposalId);
+    if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+    
+    const invoiceNumber = `INV-${Date.now()}`;
+    const invoice = new Invoice({
+      projectId: proposal.projectId,
+      proposalId: req.params.proposalId,
+      invoiceNumber,
+      status: 'draft',
+      title: proposal.title,
+      description: `Development project: ${proposal.title}`,
+      totalAmount: proposal.totalCost,
+      invoiceDate: new Date(),
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    });
+    
+    await invoice.save();
+    
+    const project = await Project.findByIdAndUpdate(
+      proposal.projectId,
+      { invoiceId: invoice._id, status: 'invoice_generated', invoiceGeneratedAt: new Date() },
+      { new: true }
+    );
+    
+    res.json({ invoice, project });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Get invoice
+app.get('/api/invoices/:id', verifyToken, async (req, res) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id);
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    res.json(invoice);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Admin approves and sends invoice to client
+app.put('/api/invoices/:id/approve-and-send', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const { paymentLink, adminNotes } = req.body;
+    
+    const invoice = await Invoice.findByIdAndUpdate(
+      req.params.id,
+      { 
+        status: 'sent', 
+        paymentLink, 
+        adminNotes,
+        sentToClientAt: new Date() 
+      },
+      { new: true }
+    );
+    
+    const project = await Project.findByIdAndUpdate(
+      invoice.projectId,
+      { status: 'invoice_approved', invoiceApprovedAt: new Date(), paymentLink },
+      { new: true }
+    );
+    
+    res.json({ invoice, project });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Record payment
+app.post('/api/invoices/:id/record-payment', verifyToken, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    const invoice = await Invoice.findById(req.params.id);
+    invoice.amountPaid += amount;
+    if (invoice.amountPaid >= invoice.totalAmount) {
+      invoice.status = 'paid';
+      invoice.paidAt = new Date();
+    } else {
+      invoice.status = 'partially_paid';
+    }
+    await invoice.save();
+    
+    const project = await Project.findById(invoice.projectId);
+    project.amountPaid = invoice.amountPaid;
+    project.paymentStatus = invoice.amountPaid >= invoice.totalAmount ? 'paid' : 'partially_paid';
+    if (invoice.amountPaid >= invoice.totalAmount) {
+      project.status = 'paid';
+      project.paidAt = new Date();
+    }
+    await project.save();
+    
+    res.json({ invoice, project });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Start development
+app.put('/api/projects/:id/start-development', verifyToken, async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    
+    const project = await Project.findByIdAndUpdate(
+      req.params.id,
+      { status: 'in_development', developmentStartedAt: new Date(), adminId: req.userId },
+      { new: true }
+    );
+    
+    res.json(project);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ START SERVER ============
+
+const PORT = process.env.PORT || 5001;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
