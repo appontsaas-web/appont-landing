@@ -1,0 +1,10 @@
+{
+  "services": {
+    "backend": {
+      "root": "backend",
+      "build": {
+        "builder": "nixpacks"
+      }
+    }
+  }
+}
