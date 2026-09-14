@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 import LandingPage from './LandingPage';
 import './LandingPage.css';
@@ -31,7 +31,7 @@ function App() {
     }
   }, [token]);
 
-  const loadUserData = async () => {
+  const loadUserData = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/user`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -45,7 +45,7 @@ function App() {
     }
   };
 
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/projects`, {
         headers: { Authorization: `Bearer ${token}` }
