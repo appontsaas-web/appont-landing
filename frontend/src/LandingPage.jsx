@@ -1,3 +1,4 @@
+import ProjectChatbot from './ProjectChatbot';
 import React, { useState } from 'react';
 
 export default function LandingPage({ onGetStarted }) {
@@ -181,6 +182,10 @@ export default function LandingPage({ onGetStarted }) {
           <p>Get a professional AI proposal that gives you confidence in your development investment.</p>
           <button className="cta-primary cta-large" onClick={onGetStarted}>Start Free Proposal</button>
         </div>
+      </section>
+
+      <section id="contact" className="contact">
+        <ProjectChatbot />
       </section>
 
       <footer className="footer">
