@@ -29,7 +29,7 @@ function App() {
       loadUserData();
       loadProjects();
     }
-  }, [token]);
+  }, [token, loadUserData, loadProjects]);
 
   const loadUserData = useCallback(async () => {
     try {
