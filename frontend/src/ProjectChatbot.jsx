@@ -201,4 +201,24 @@ const ProjectChatbot = () => {
   );
 };
 
+
+      {showSuccess && (
+        <SuccessModal
+          projectType={formData.projectType}
+          email={successEmail}
+          onClose={() => {
+            setShowSuccess(false);
+            setStep(0);
+            setFormData({
+              projectType: '', description: '', targetAudience: '', techStack: '',
+              budget: '', timeline: '', teamSize: '', features: '',
+              integrations: '', support: '', industry: '', email: '',
+            });
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
 export default ProjectChatbot;
