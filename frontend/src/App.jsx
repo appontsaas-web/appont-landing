@@ -52,6 +52,13 @@ function App() {
     }
   }, [token]);
 
+  useEffect(() => {
+    if (token) {
+      loadUserData();
+      loadProjects();
+    }
+  }, [token, loadUserData, loadProjects]);
+
   const loadProjectDetail = async (projectId) => {
     try {
       console.log('Loading project:', projectId);
