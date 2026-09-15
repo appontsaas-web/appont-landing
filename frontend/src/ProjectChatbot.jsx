@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import SuccessModal from './SuccessModal';
 import './ProjectChatbot.css';
 
 const ProjectChatbot = () => {
