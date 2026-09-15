@@ -24,12 +24,6 @@ function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [isGenerating, setIsGenerating] = useState(false);
 
-  useEffect(() => {
-    if (token) {
-      loadUserData();
-      loadProjects();
-    }
-  }, [token, loadUserData, loadProjects]);
 
   const loadUserData = useCallback(async () => {
     try {
