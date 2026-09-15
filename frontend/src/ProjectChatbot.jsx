@@ -197,11 +197,6 @@ const ProjectChatbot = () => {
           </button>
         </div>
       </div>
-    </div>
-  );
-};
-
-
       {showSuccess && (
         <SuccessModal
           projectType={formData.projectType}
