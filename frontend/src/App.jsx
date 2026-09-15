@@ -43,7 +43,7 @@ function App() {
     } catch (error) {
       console.error('Error loading user:', error);
     }
-  };
+  }, [token]);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -56,7 +56,7 @@ function App() {
     } catch (error) {
       console.error('Error loading projects:', error);
     }
-  };
+  }, [token]);
 
   const loadProjectDetail = async (projectId) => {
     try {
