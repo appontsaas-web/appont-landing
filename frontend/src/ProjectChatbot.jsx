@@ -22,7 +22,7 @@ const ProjectChatbot = () => {
   });
 
   const [showSuccess, setShowSuccess] = useState(false);
-  const [successEmail, setSuccessEmail] = useState('');
+  const [successEmail] = useState('');
 
   const questions = [
     { id: 'projectType', label: 'What type of project do you need?', placeholder: 'E.g., Web App, Mobile App, AI Solution, Website, SaaS' },
